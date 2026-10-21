@@ -26,6 +26,7 @@ type NativeAPI = {
   close: NativeFunction<number, [number]>;
   read: NativeFunction<number, [number, NativePointerValue, number]>;
   pwrite: NativeFunction<number, [number, NativePointerValue, number, number]>;
+  sleep: NativeFunction<number, [number]>;
   exit: NativeFunction<void, [number]>;
 };
 
@@ -61,6 +62,9 @@ export function getApi(): NativeAPI {
       "pointer",
       "long",
       "long",
+    ]),
+    sleep: new NativeFunction(Module.getGlobalExportByName("sleep"), "uint", [
+      "uint",
     ]),
     exit: new NativeFunction(Module.getGlobalExportByName("exit"), "void", [
       "int",

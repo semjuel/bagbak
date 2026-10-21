@@ -13,32 +13,67 @@ const EXTENSION_SYMBOLS = [
 
 const APP_SYMBOLS = ["UIKitCore`UIApplicationMain", "AppKit`NSApplicationMain"];
 
-function replaceWithRunLoop(symbols: string[]) {
-  const CFRunLoopRun =
-    Process.getModuleByName("CoreFoundation").getExportByName("CFRunLoopRun");
+const EXIT_SYMBOLS = [
+  "libsystem_c.dylib`exit",
+  "libsystem_kernel.dylib`_exit",
+  "libsystem_kernel.dylib`__exit",
+];
 
+// Keep a module-level reference so Frida never garbage-collects the callback
+// while threads are parked inside it.
+const parkThreadCallback = new NativeCallback(
+  () => {
+    const { sleep } = getApi();
+    while (true) {
+      sleep(3600);
+    }
+    return 0;
+  },
+  "int",
+  [],
+);
+
+function replaceWithPark(symbols: string[]) {
   for (const symbol of symbols) {
     const [dylib, func] = symbol.split("`");
     try {
-      const p = Process.getModuleByName(dylib).getExportByName(func);
+      const mod = Process.findModuleByName(dylib);
+      if (!mod) continue;
+      const p = mod.findExportByName(func);
+      if (!p) continue;
       console.log("replace function", symbol, p);
-      Interceptor.replace(p, CFRunLoopRun);
+      Interceptor.replace(p, parkThreadCallback);
     } catch (e: unknown) {
       console.log("skip", symbol, (e as Error).message);
     }
   }
 
-  ObjC.schedule(ObjC.mainQueue, () => {
-    console.log("mainQueue scheduled");
-  });
+  for (const symbol of EXIT_SYMBOLS) {
+    const [dylib, func] = symbol.split("`");
+    try {
+      const mod = Process.findModuleByName(dylib);
+      if (!mod) continue;
+      const p = mod.findExportByName(func);
+      if (!p) continue;
+      Interceptor.replace(p, parkThreadCallback);
+    } catch {
+      // ignore
+    }
+  }
+
+  if (ObjC.available) {
+    ObjC.schedule(ObjC.mainQueue, () => {
+      console.log("mainQueue scheduled");
+    });
+  }
 }
 
 rpc.exports = {
   hookAppMain() {
-    replaceWithRunLoop(APP_SYMBOLS);
+    replaceWithPark(APP_SYMBOLS);
   },
   hookExtensionMain() {
-    replaceWithRunLoop(EXTENSION_SYMBOLS);
+    replaceWithPark(EXTENSION_SYMBOLS);
   },
 
   dump(
@@ -47,7 +82,7 @@ rpc.exports = {
     binaries: MachOTasks,
     isExtension: boolean = false,
   ) {
-    const { open, close, pwrite, exit } = getApi();
+    const { open, close, pwrite } = getApi();
 
     for (const [relative, info] of Object.entries(binaries)) {
       console.log("decrypt", relative);
@@ -88,12 +123,6 @@ rpc.exports = {
 
       send({ event: "patch", name: relative });
       recv("ack", () => {}).wait();
-    }
-
-    if (isExtension) {
-      ObjC.schedule(ObjC.mainQueue, () => {
-        exit(0);
-      });
     }
 
     return true;
