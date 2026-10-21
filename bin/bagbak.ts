@@ -13,7 +13,7 @@ import {
 import type { Device } from "frida";
 
 import { BagBak, type DumpMode } from "../index.ts";
-import { enableDebug, version } from "../lib/utils.ts";
+import { enableDebug, sleep, version } from "../lib/utils.ts";
 
 const VALID_MODES = ["all", "main", "extensions", "binaries"] as const;
 
@@ -146,10 +146,24 @@ async function main() {
       process.exit(1);
     }
 
-    const apps = await device.enumerateApplications({ scope: Scope.Metadata });
-    const app = apps.find(
-      (app) => app.name === target || app.identifier === target,
-    );
+    let app: Awaited<ReturnType<Device["enumerateApplications"]>>[number] | undefined;
+    const targetLower = target.toLowerCase();
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const apps = await device.enumerateApplications({ scope: Scope.Metadata });
+      app =
+        apps.find(
+          (a) => a.name === target || a.identifier === target,
+        ) ??
+        apps.find(
+          (a) =>
+            a.identifier.toLowerCase() === targetLower ||
+            a.name.toLowerCase() === targetLower,
+        );
+      if (app) break;
+      if (attempt < 3) {
+        await sleep(1000);
+      }
+    }
     if (!app) throw new Error(`Unable to find app ${target}`);
 
     const job = new BagBak(device, app);
